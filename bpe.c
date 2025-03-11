@@ -2,12 +2,15 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <stdint.h>
+#include <errno.h>
 
-// building a byte pair encoding in c
-// eventually will feed this encoding to train something
+#define HASHMAP_IMPLEMENTATION
+#include "hashmap.h"
 
-#define DA_INIT_CAP
 
+//thank you tsoding
+#define DA_INIT_CAP 256
 #define da_append(da, item)                                                          \
     do {                                                                                 \
         if ((da)->count >= (da)->capacity) {                                             \
@@ -20,64 +23,234 @@
     } while (0)
 
 typedef struct { 
-	char text[2];
-	int count;
-} Pair;
+	uint32_t text[2];
+    int count;
+} Count;
 
 typedef struct { 
-    Pair* items;
-    int count;
-    int capacity;
+    Count* items;
+    size_t count;
+    size_t capacity;
+} Counts;
+
+typedef struct { 
+    char* items;
+    size_t count;
+    size_t capacity;
+} Text;
+
+typedef struct { 
+    uint32_t* items;
+    size_t count;
+    size_t capacity;
+} Tokens; 
+
+typedef struct { 
+    uint32_t value;
+    uint32_t l;
+    uint32_t r;
+} KV;
+
+typedef struct { 
+    KV* items;
+    size_t count;
+    size_t capacity;
 } Map;
 
-int find_str(Map* arr, char *x) { 
+int contains(Counts* arr, uint32_t x[]) { 
     for (size_t i = 0; i < arr->count; i ++)  { 
-        if (memcmp(arr->items[i].text,x,2) == 0) { 
-            //printf("compared and found the right value: %d, %s",i, arr->items[i].text );
+        if (arr->items[i].text[0] == x[0] && arr->items[i+1].text[1] == x[1]) { 
             return i;
         } 
     } 
     return -1;
 } 
 
+int compare(const void* a, const void* b) {
+    const Count* pairA = (const Count*)a;
+    const Count* pairB = (const Count*)b;
 
-Map build_map(char* text_test) { 
-	size_t text_len = strlen(text_test);
-    Map arr[] = {0};
-	printf("The size of the string is %zu\n", text_len);
+    if (pairA->count < pairB->count) return 1;
+    if (pairA->count > pairB->count) return -1;
+    return 0;
+}
 
-    for (size_t i = 0; i < text_len - 1; i ++)  { 
-        char e[] = { text_test[i], text_test[i+1] };
-        Pair p = {
-            .text = { text_test[i], text_test[i+1] },
+    //print counter
+void print_counter(Counts* counter) { 
+    // for (size_t i = 0; i < counter->count; i ++)  { 
+    for (size_t i = 0; i < 10; i ++)  { 
+        printf("%c%c: %d\n", counter->items[i].text[0], counter->items[i].text[1], counter->items[i].count);
+    } 
+} 
+
+void build_counter(Counts* counter, Tokens* tokens) { 
+    for (size_t i = 0; i < tokens->count - 1; i ++)  { 
+        Count p = {
+            .text = { tokens->items[i],tokens->items[i+1] },
             .count = 1
         };
-        int v = find_str(arr, e);
+        int v = contains(counter, p.text);
         if (v < 0) { 
-            da_append(arr, p);
+            da_append(counter, p);
         } else {  
-            arr->items[v].count += 1;
+            counter->items[v].count += 1;
         } 
     } 
 
-    //print map
-  //  for (size_t i = 0; i < arr->count; i ++)  { 
-  //      printf("%c%c: %d\n", arr->items[i].text[0], arr->items[i].text[1], arr->items[i].count);
-  //  } 
-    return *arr;
-
 } 
 
+
+int compress(Tokens* input, Tokens* output, Map* map, uint32_t count) { 
+    //if (count % 1024 == 0) { 
+    // printf("on iteration %d, current size = %ld\n", count, input->count);
+    //} 
+    Counts counter = {0};
+    build_counter(&counter, input);
+    qsort(counter.items, counter.count, sizeof(Count), compare);
+
+    // uint32_t* top = counter.items[0];
+    Count top = counter.items[0];
+
+    if (counter.count == 0) {
+        fprintf(stderr, "No pairs found\n");
+        return 1;
+    }
+    if (counter.items[0].count <=1 )  return 1;  
+
+    uint32_t new_token_id = 256 + count;
+
+    // add new key value to the map
+    KV kv = {
+        .value = new_token_id,
+        .l = top.text[0],
+        .r = top.text[1]
+    }; 
+    da_append(map, kv);
+
+    size_t i = 0;
+    while (i < input->count) {
+        if (i + 1 < input->count && input->items[i] == top.text[0] && input->items[i + 1] == top.text[1]) {
+            da_append(output, new_token_id);
+            i += 2; 
+        } else {
+            da_append(output, input->items[i]);
+            i += 1;
+        }
+    }
+    
+    return 0;
+} 
+
+// Function to load text from a file
+char* load_text_from_file(const char* filename, size_t* text_len) {
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) {
+        fprintf(stderr, "Error opening file '%s': %s\n", filename, strerror(errno));
+        return NULL;
+    }
+
+    // Get file size
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (file_size < 0) {
+        fprintf(stderr, "Error determining size of file '%s': %s\n", filename, strerror(errno));
+        fclose(file);
+        return NULL;
+    }
+
+    // Allocate buffer with extra byte for null terminator
+    char* buffer = (char*)malloc(file_size + 1);
+    if (buffer == NULL) {
+        fprintf(stderr, "Memory allocation failed for file '%s'\n", filename);
+        fclose(file);
+        return NULL;
+    }
+
+    // Read file content
+    size_t bytes_read = fread(buffer, 1, file_size, file);
+    if (bytes_read < (size_t)file_size && ferror(file)) {
+        fprintf(stderr, "Error reading file '%s': %s\n", filename, strerror(errno));
+        free(buffer);
+        fclose(file);
+        return NULL;
+    }
+
+    // Null-terminate the string
+    buffer[bytes_read] = '\0';
+    *text_len = bytes_read;
+    
+    fclose(file);
+    return buffer;
+}
+
 int main() { 
+    // Load text from file
+    size_t text_len = 0;
+    char* text_test = load_text_from_file("dostoevsky.txt", &text_len); // just took from claude thanks
+    // char* text_test = load_text_from_file("dostoevsky_long.txt", &text_len); // just took from claude thanks
+    
+    if (text_test == NULL) {
+        fprintf(stderr, "Failed to load text from test.txt. Exiting.\n");
+        return 1;
+    }
+    
+    printf("Loaded %zu bytes from test.txt\n", text_len);
 
-//	Pair kv = { 
-//		.text = "ab",
-//		.count = 1,
-//	};
+    // define tokens
+    Tokens tokens = {0}; 
+    for (size_t i = 0; i < text_len; i ++) { 
+        da_append(&tokens, text_test[i]);
+    } 
 
-	char* text_test = "This is a test input";
+    Tokens output_tokens = {0};
+    Tokens temp_tokens = {0};
+    Map map = {0}; 
+    uint32_t iteration = 0;
 
-    Map map = build_map(text_test);
+    printf("Initial Size: %ld\n", tokens.count);
+    
+    size_t final_count_len = 0; 
+
+    while (compress(&tokens, &output_tokens, &map, iteration) != 1) {
+        iteration++;
+        // printf("Iteration %u - Compressed size: %ld\n", iteration, output_tokens.count);
+        
+        final_count_len = output_tokens.count;
+        
+        // Swap the buffers properly
+        temp_tokens = tokens;      
+        tokens = output_tokens;    
+        output_tokens.items = temp_tokens.items;
+        output_tokens.capacity = temp_tokens.capacity;
+        output_tokens.count = 0;   // Reset count but keep the allocated memory
+    }
+
+    
+    printf("Final size: %ld\n", final_count_len);
+    printf("Final output after %u iterations:\n", iteration);
+    for (size_t i = 0; i < tokens.count; i++) {
+        if (tokens.items[i] < 256) {
+            printf("%c", (char)tokens.items[i]);
+        } else {
+            printf("[%u]", tokens.items[i]);
+        }
+    }
+    printf("\n");
+
+    printf("Final mapping:\n");
+    for (size_t i = 0; i < map.count; i++) {
+        KV kv = map.items[i];
+        printf("%d => %d, %d\n", kv.value, kv.l, kv.r);
+    }
+    printf("\n");
+
+    
+    // Free allocated memory
+    free(tokens.items);
+    free(output_tokens.items);
+    free(text_test);  // Don't forget to free the loaded text buffer
 
     return 0;
 
