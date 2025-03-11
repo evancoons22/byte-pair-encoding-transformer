@@ -185,6 +185,31 @@ char* load_text_from_file(const char* filename, size_t* text_len) {
     return buffer;
 }
 
+void print_to_file(FILE* file, Map* map) { 
+    printf("Printing encoding to file\n");
+    if (file == NULL) { 
+        printf("error opening file\n");
+    } 
+    fprintf(file, "map = {\n");
+    for (size_t i = 0; i < map->count; i++) {
+        KV kv = map->items[i];
+        // printf("%d => %d, %d\n", kv.value, kv.l, kv.r);
+        fprintf(file, "\t%d => %d, %d\n", kv.value, kv.l, kv.r);
+    }
+    fprintf(file, "}");
+} 
+
+void render_tokens(Tokens* tokens) { 
+    for (size_t i = 0; i < tokens->count; i++) {
+        if (tokens->items[i] < 256) {
+            printf("%c", (char)tokens->items[i]);
+        } else {
+            printf("[%u]", tokens->items[i]);
+        }
+    }
+    printf("\n");
+} 
+
 int main() { 
     // Load text from file
     size_t text_len = 0;
@@ -209,15 +234,12 @@ int main() {
     Map map = {0}; 
     uint32_t iteration = 0;
 
-    printf("Initial Size: %ld\n", tokens.count);
+    printf("Initial text size: %lld\n", tokens.count);
     
-    size_t final_count_len = 0; 
 
     while (compress(&tokens, &output_tokens, &map, iteration) != 1) {
         iteration++;
         // printf("Iteration %u - Compressed size: %ld\n", iteration, output_tokens.count);
-        
-        final_count_len = output_tokens.count;
         
         // Swap the buffers properly
         temp_tokens = tokens;      
@@ -228,24 +250,13 @@ int main() {
     }
 
     
-    printf("Final size: %ld\n", final_count_len);
-    printf("Final output after %u iterations:\n", iteration);
-    for (size_t i = 0; i < tokens.count; i++) {
-        if (tokens.items[i] < 256) {
-            printf("%c", (char)tokens.items[i]);
-        } else {
-            printf("[%u]", tokens.items[i]);
-        }
-    }
-    printf("\n");
+    printf("Iterations : %u\n", iteration);
+    printf("Final text size: %lld\n", tokens.count);
+    printf("Final vocab size: %lld\n", 256 + map.count);
 
-    printf("Final mapping:\n");
-    for (size_t i = 0; i < map.count; i++) {
-        KV kv = map.items[i];
-        printf("%d => %d, %d\n", kv.value, kv.l, kv.r);
-    }
-    printf("\n");
 
+    FILE* file = fopen("mapping.txt", "w"); 
+    print_to_file(file, &map);
     
     // Free allocated memory
     free(tokens.items);

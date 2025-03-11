@@ -10,10 +10,18 @@ int main(int argc, char **argv)
 
     Nob_Cmd cmd = {0};
 
-    nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", BUILD_DIR"bpe", "bpe.c");
-    if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
-    nob_cmd_append(&cmd, "./build/bpe");
-    if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
+    #ifdef _WIN32
+        nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", BUILD_DIR"bpe", "bpe.c");
+        if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
+        nob_cmd_append(&cmd, "./build/bpe.exe");
+        if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
+    #else
+        nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", BUILD_DIR"bpe", "bpe.c");
+        if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
+        nob_cmd_append(&cmd, "./build/bpe");
+        if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
+    #endif
+
 
    // for when compiling the hashmap too
    //
