@@ -8,8 +8,8 @@
 #define HASHMAP_IMPLEMENTATION
 #include "hashmap.h"
 
+//thank you https://github.com/tsoding
 
-//thank you tsoding
 #define DA_INIT_CAP 256
 #define da_append(da, item)                                                          \
     do {                                                                                 \
