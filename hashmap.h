@@ -3,11 +3,18 @@
 
 #include <stdio.h> 
 #include <stdlib.h> 
+#include <stdint.h>
 
 #define SIZE 31
 
+// Key structure to hold a pair of uint32_t values
+typedef struct {
+    uint32_t first;
+    uint32_t second;
+} KeyPair;
+
 typedef struct Node { 
-    uint32_t key;
+    KeyPair key;      // Changed from uint32_t to KeyPair
     uint32_t value;
     struct Node* next;
 } Node;
@@ -16,22 +23,33 @@ typedef struct {
     Node **buckets;
 } HashMap;
 
-uint32_t int_hash(uint32_t key);
+uint32_t pair_hash(KeyPair key);
 HashMap* hashmap_create();
-void hashmap_insert(HashMap* hashmap, uint32_t key, uint32_t value);
-int hashmap_get(HashMap* hashmap, uint32_t key, int* found);
-int hashmap_remove(HashMap* hashmap, uint32_t key, int* removed);
+void hashmap_insert(HashMap* hashmap, KeyPair key, uint32_t value);
+int hashmap_get(HashMap* hashmap, KeyPair key, int* found);
+int hashmap_remove(HashMap* hashmap, KeyPair key, int* removed);
 void freeHashMap(HashMap *map);
 
 #ifdef HASHMAP_IMPLEMENTATION
 
-uint32_t int_hash(uint32_t key) {
-    key = ((key >> 16) ^ key) * 0x45d9f3b;
-    key = ((key >> 16) ^ key) * 0x45d9f3b;
-    key = (key >> 16) ^ key;
-    return key;
+// Hash function for a pair of uint32_t values
+uint32_t pair_hash(KeyPair key) {
+    // Combine the two values to create a single hash
+    uint64_t combined = ((uint64_t)key.first << 32) | key.second;
+    
+    // Apply a hash function to the combined value
+    uint32_t hash = (uint32_t)(combined ^ (combined >> 32));
+    hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
+    hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
+    hash = (hash >> 16) ^ hash;
+    
+    return hash;
 }
 
+// Helper function to check if two KeyPairs are equal
+int key_equals(KeyPair a, KeyPair b) {
+    return (a.first == b.first) && (a.second == b.second);
+}
 
 HashMap* hashmap_create() { 
     HashMap* map = malloc(sizeof(HashMap)); 
@@ -39,48 +57,55 @@ HashMap* hashmap_create() {
     return map;
 } 
 
-void hashmap_insert(HashMap* hashmap, uint32_t key, uint32_t value) { 
-    // first get the hash 
-    unsigned int idx = int_hash(key) % SIZE;
+void hashmap_insert(HashMap* hashmap, KeyPair key, uint32_t value) { 
+    // Get the hash and bucket index
+    unsigned int idx = pair_hash(key) % SIZE;
     Node* node = hashmap->buckets[idx];
+    
+    // Check if key already exists
     while(node) { 
-        if (node->key == key) { 
+        if (key_equals(node->key, key)) { 
             node->value = value; 
             return;
         } 
         node = node->next;
     } 
+    
+    // Create a new node
     Node* new_node = malloc(sizeof(Node));
     new_node->key = key;
     new_node->value = value;
-    // whatever is in the bucket right now, put new_node in the first space and move the rest over
+    
+    // Insert at the beginning of the bucket
     new_node->next = hashmap->buckets[idx];
     hashmap->buckets[idx] = new_node;
-
 } 
 
-int hashmap_get(HashMap* hashmap, uint32_t key, int* found) { 
-    unsigned int idx = int_hash(key) % SIZE;
+int hashmap_get(HashMap* hashmap, KeyPair key, int* found) { 
+    unsigned int idx = pair_hash(key) % SIZE;
     Node* node = hashmap->buckets[idx];
+    
     while(node) { 
-        if (node->key == key) {  
+        if (key_equals(node->key, key)) {  
             *found = 1;
             return node->value;
         } else { 
             node = node->next;
         } 
     } 
+    
     *found = 0;
     return 0;
 } 
 
-int hashmap_remove(HashMap* hashmap, const uint32_t key, int* removed) {
-    unsigned int idx = int_hash(key) % SIZE;
+int hashmap_remove(HashMap* hashmap, KeyPair key, int* removed) {
+    unsigned int idx = pair_hash(key) % SIZE;
     Node* node = hashmap->buckets[idx];
     Node* prev = NULL;
     *removed = 0;
+    
     while (node) {
-        if (node->key == key) {
+        if (key_equals(node->key, key)) {
             if (prev) {
                 prev->next = node->next;
             } else {
@@ -93,6 +118,7 @@ int hashmap_remove(HashMap* hashmap, const uint32_t key, int* removed) {
         prev = node;
         node = node->next;
     }
+    
     return 0;
 }
 

@@ -16,7 +16,7 @@ int main(int argc, char **argv)
         nob_cmd_append(&cmd, "./build/bpe.exe");
         if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
     #else
-        nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", BUILD_DIR"bpe", "bpe.c");
+        nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-O3", "-o", BUILD_DIR"bpe", "bpe.c");
         if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
         nob_cmd_append(&cmd, "./build/bpe");
         if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
