@@ -6,4 +6,7 @@
 $ cc -o nob nob.c // only once
 $ ./nob 
 ```
-(there are some adjustable parameters in bpe.c)
+note: `run_version_1()` is a naive approach. `run_version_2()` uses max heap and hash map to improve time
+
+### examples
+- data comes from the [gutenberg project](https://www.gutenberg.org/)

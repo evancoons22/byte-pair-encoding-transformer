@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <inttypes.h>
+// this is a better hashmap implementation than mine
 #include "uthash.h"
 
 #ifdef HEAP_IMPLEMENTATION

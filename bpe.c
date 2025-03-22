@@ -106,9 +106,9 @@ void build_counter(Counts* counter, Tokens* tokens) {
 
 
 int compress(Tokens* input, Tokens* output, Map* map, uint32_t count) { 
-    if (count % 1 == 0) { 
-     printf("on iteration %d, current size = %ld\n", count, input->count);
-    } 
+   // if (count % 1 == 0) { 
+   //  printf("on iteration %d, current size = %ld\n", count, input->count);
+   // } 
     Counts counter = {0};
     build_counter(&counter, input);
     qsort(counter.items, counter.count, sizeof(Count), compare);
@@ -160,9 +160,9 @@ void build_heap_counter(BPEHeap* heap, Tokens* tokens) {
 } 
 
 int compress2(Tokens* input, Tokens* output, Map* map, BPEHeap* heap, uint32_t count) { 
-    if (count % 100 == 0) { 
-     printf("on iteration %d, current size = %ld\n", count, input->count);
-    } 
+   if (count % 100 == 0) { 
+    printf("on iteration %d, current size = %ld\n", count, input->count);
+   } 
 
     // get the top item
     uint32_t a = 0, b = 0; 
@@ -286,8 +286,9 @@ void render_tokens(Tokens* tokens) {
 void run_version_1() { 
     // Load text from file
     size_t text_len = 0;
-    char* text_test = load_text_from_file("dostoevsky.txt", &text_len); // just took from claude thanks
-    // char* text_test = load_text_from_file("dostoevsky_long.txt", &text_len); // just took from claude thanks
+    char* text_test = load_text_from_file("examples/dostoevsky.txt", &text_len); 
+    // char* text_test = load_text_from_file("examples/dostoevsky_long.txt", &text_len);
+    // char* text_test = load_text_from_file("examples/shakespeare.txt", &text_len); 
     
     if (text_test == NULL) {
         fprintf(stderr, "Failed to load text from test.txt. Exiting.\n");
@@ -325,7 +326,7 @@ void run_version_1() {
     printf("Final text size: %ld\n", tokens.count);
     printf("Final vocab size: %ld\n", 256 + map.count);
 
-    render_tokens(&tokens);
+    //render_tokens(&tokens);
 
 
     FILE* file = fopen("mapping.txt", "w"); 
@@ -338,20 +339,15 @@ void run_version_1() {
 
 } 
 
-int main() { 
-
-    //  -------------------------------------------------------------------------------------------
-    // VERSION 2 = with algorithm improvements (hasmap)
-    //  -------------------------------------------------------------------------------------------
-    
-    //HashMap* map = hashmap_create();
-    printf("Hello world\n");
+void run_version_2() { 
     BPEHeap heap = BPE_HEAP_INITIALIZER;
     
     // read in the file
     size_t text_len = 0;
-    // char* text_test = load_text_from_file("examples/dostoevsky.txt", &text_len); // just took from claude thanks
-    char* text_test = load_text_from_file("examples/dostoevsky_long.txt", &text_len); // just took from claude thanks
+    // char* text_test = load_text_from_file("examples/dostoevsky.txt", &text_len); 
+    // char* text_test = load_text_from_file("examples/dostoevsky_long.txt", &text_len);
+    char* text_test = load_text_from_file("examples/shakespeare.txt", &text_len); 
+    
     if (text_test == NULL) {
         fprintf(stderr, "Failed to load text from test.txt. Exiting.\n");
     }
@@ -364,6 +360,8 @@ int main() {
     for (size_t i = 0; i < text_len; i ++) { 
         da_append(&tokens, text_test[i]);
     } 
+
+    printf("Initial text size: %ld\n", tokens.count);
 
     // count the actual items
     build_heap_counter(&heap, &tokens);
@@ -384,9 +382,18 @@ int main() {
     FILE* file = fopen("mapping.txt", "w"); 
     print_to_file(file, &map);
 
+    printf("Iterations : %u\n", iteration);
+    printf("Final text size: %ld\n", tokens.count);
+    printf("Final vocab size: %ld\n", 256 + map.count);
 
     bpe_heap_free(&heap);
-    
+} 
+
+int main() { 
+   // printf("version 1: \n");
+   // run_version_1();
+   // printf("\n\n");
+   run_version_2();
 
     return 0;
 
