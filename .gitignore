@@ -1,5 +1,5 @@
 *.exe
-/build/
+/build/.
 *.txt
 nob
 nob.old

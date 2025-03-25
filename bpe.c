@@ -103,8 +103,6 @@ void build_counter(Counts* counter, Tokens* tokens) {
 
 } 
 
-
-
 int compress(Tokens* input, Tokens* output, Map* map, uint32_t count) { 
    // if (count % 1 == 0) { 
    //  printf("on iteration %d, current size = %ld\n", count, input->count);
@@ -210,8 +208,6 @@ int compress2(Tokens* input, Tokens* output, Map* map, BPEHeap* heap, uint32_t c
     
     return 0;
 } 
-
-
 
 
 // Function to load text from a file
