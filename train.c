@@ -132,6 +132,42 @@ void attention(float Q[], float K[], float V[], int size) {
 
 } 
 
+void masked_attention(float Q[], float K[], float V[], int size) { 
+    // Q * K^T
+    transpose(K, size, DIMENSION_KEYS);
+    float *QKT = malloc(size * size * sizeof(float));
+    matmul(Q, K, size, DIMENSION_KEYS, size, QKT);
+    // scale
+    float factor = sqrt(DIMENSION_KEYS);
+    for (int i = 0; i < size; i ++ ) { 
+        for (int j = 0; j < size; j ++ ) { 
+            QKT[i * size + j] /= factor;
+        } 
+    } 
+    
+    // Apply causal mask: set upper triangular part (future tokens) to negative infinity
+    // This ensures tokens can only attend to previous tokens and themselves
+    for (int i = 0; i < size; i++) {
+        for (int j = i + 1; j < size; j++) {
+            QKT[i * size + j] = -INFINITY;
+        }
+    }
+    
+    //softmax
+    float *QKT_out = malloc(size * size * sizeof(float));
+    softmax_matrix(QKT, QKT_out, size, size);
+    float *result = malloc(size * DIMENSION_VALUES * sizeof(float));
+    matmul(QKT_out, V, size, size, DIMENSION_VALUES, result);
+
+
+    free(QKT);
+    free(QKT_out);
+    free(result);
+
+} 
+
+> here is an attention function, but I need to implement masking before the softmax. Can you implement? 
+
 int main() { 
     // TODO: load the byte pair encoding from the previous program.
     // TODO: accept input from the user in the command line and then run the forward part
@@ -143,7 +179,7 @@ int main() {
     // dummy 100 token input
     int size = 100;
 
-    // TODO: learned matrices W_q, W_k, W_v
+    // TODO: learned projection matrices W_q, W_k, W_v
     // dummy scaled attention, 
     float Q[size * DIMENSION_KEYS];
     float K[size * DIMENSION_KEYS];
