@@ -166,7 +166,53 @@ void masked_attention(float Q[], float K[], float V[], int size) {
 
 } 
 
-> here is an attention function, but I need to implement masking before the softmax. Can you implement? 
+
+void nn_forward(float weights[], float activations[], float z[]) { 
+    // alignment in memory matters here: 
+    // weights index: layer i, to node k from node j
+    // input will be considered the first of the activations
+    // output will be considered the last of the activation
+
+    // input layer is size 256
+    // NN_SIZE 1024
+    //     *   *
+    //     *   *
+    // *   *   *   *
+    // *   *   *   *
+    //     *   *
+    //     *   *
+
+    // first layer
+    int layer = 1;
+    for(size_t k = 0; k < NN_SIZE; k ++) {
+        for(size_t j = 0; j < DIMENSION_VALUES; j ++) { 
+            z[layer * 256 + k] += activations[j] * weights[k * DIMENSION_VALUES + j]; // 0 * 256 + j 
+        } 
+        activations[layer * 256 + k] = z[layer * 256 + k]; // some type of activation here
+    } 
+
+    // second layer
+    layer = 2;
+    for(size_t k = 0; k < NN_SIZE; k ++) {
+        for(size_t j = 0; j < NN_SIZE; j ++) { 
+            z[256 + 1024 + k] += activations[256 + NN_SIZE + j] * weights[256*1024 + k * NN_SIZE + j];
+        } 
+        activations[256 + 1024 + k] = z[256 + 1024 + k]; // some type of activation here
+    } 
+
+    // third layer
+    layer = 3;
+    for(size_t k = 0; k < DIMENSION_VALUES; k ++) {
+        for(size_t j = 0; j < NN_SIZE; j ++) { 
+            z[256 + 1024 * 2 + k] += activations[256 + 2 * NN_SIZE + j] * weights[256*1024 + 1024*1024 + k * NN_SIZE + j]; 
+        } 
+        activations[256 + 1024 * 2 + k] = z[256 + 1024 * 2 + k]; // some type of activation here
+    } 
+
+
+
+} 
+
 
 int main() { 
     // TODO: load the byte pair encoding from the previous program.
@@ -188,5 +234,7 @@ int main() {
 
     printf("trained\n");
     // TODO: much much more
+
+    free(pe);
 
 } 

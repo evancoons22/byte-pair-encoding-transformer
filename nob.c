@@ -21,7 +21,7 @@ int main(int argc, char **argv)
         nob_cmd_append(&cmd, "./build/bpe");
         if (!nob_cmd_run_sync_and_reset(&cmd)) ;
     } else if (strcmp(argv[1], "train") == 0) {  
-        nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-lm", "-o", BUILD_DIR"train", "train.c");
+        nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", BUILD_DIR"train", "train.c", "-lm");
         (!nob_cmd_run_sync_and_reset(&cmd));
         nob_cmd_append(&cmd, "./build/train");
         if (!nob_cmd_run_sync_and_reset(&cmd));
