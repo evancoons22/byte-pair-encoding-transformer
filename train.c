@@ -9,6 +9,7 @@
 #define DIMENSION_KEYS (DIMENSION_HIDDEN / NUM_HEADS)  // 256 / 4 = 64
 #define DIMENSION_VALUES (DIMENSION_HIDDEN / NUM_HEADS) // 256 / 4 = 64
 #define NN_SIZE 1024  // 4 * DIMENSION_HIDDEN
+#define VOCAB_SIZE 500
 
 typedef struct { 
     float* items; 
@@ -107,7 +108,7 @@ void matmul(float A[], float B[], int N, int D, int M, float result[]) {
 
 // size is the input size
 // Q, K, V have already been projected here to size x d_k
-void attention(float Q[], float K[], float V[], int size) { 
+void attention(float Q[], float K[], float V[], int size, float* result) { 
     // Q * K^T
     transpose(K, size, DIMENSION_KEYS);
     float *QKT = malloc(size * size * sizeof(float));
@@ -122,7 +123,6 @@ void attention(float Q[], float K[], float V[], int size) {
     //softmax
     float *QKT_out = malloc(size * size * sizeof(float));
     softmax_matrix(QKT, QKT_out, size, size);
-    float *result = malloc(size * DIMENSION_VALUES * sizeof(float));
     matmul(QKT_out, V, size, size, DIMENSION_VALUES, result);
 
 
@@ -166,6 +166,11 @@ void masked_attention(float Q[], float K[], float V[], int size) {
 
 } 
 
+//rows of Q, K, V are the embeddings
+//void attention_projection (const float* input, const float* W_Q, const float* W_K, const float* W_V, float* Q, float* K, float* V, int d_model) { 
+//
+//}
+
 
 void nn_forward(float weights[], float activations[], float z[]) { 
     // alignment in memory matters here: 
@@ -175,12 +180,12 @@ void nn_forward(float weights[], float activations[], float z[]) {
 
     // input layer is size 256
     // NN_SIZE 1024
-    //     *   *
-    //     *   *
-    // *   *   *   *
-    // *   *   *   *
-    //     *   *
-    //     *   *
+    //     *
+    //     *
+    // *   *   *
+    // *   *   *
+    //     *
+    //     *
 
     // first layer
     int layer = 1;
@@ -191,16 +196,8 @@ void nn_forward(float weights[], float activations[], float z[]) {
         activations[layer * 256 + k] = z[layer * 256 + k]; // some type of activation here
     } 
 
-    // second layer
-    layer = 2;
-    for(size_t k = 0; k < NN_SIZE; k ++) {
-        for(size_t j = 0; j < NN_SIZE; j ++) { 
-            z[256 + 1024 + k] += activations[256 + NN_SIZE + j] * weights[256*1024 + k * NN_SIZE + j];
-        } 
-        activations[256 + 1024 + k] = z[256 + 1024 + k]; // some type of activation here
-    } 
 
-    // third layer
+    // second layer
     layer = 3;
     for(size_t k = 0; k < DIMENSION_VALUES; k ++) {
         for(size_t j = 0; j < NN_SIZE; j ++) { 
@@ -208,33 +205,101 @@ void nn_forward(float weights[], float activations[], float z[]) {
         } 
         activations[256 + 1024 * 2 + k] = z[256 + 1024 * 2 + k]; // some type of activation here
     } 
-
-
-
 } 
 
+void convert_to_embeddings(float *E, float* embeddings, float* input, int size){ 
+    // Create learned embedding matrix E
+    // Initialize E with random values (in a real scenario, this would be loaded from a trained model)
+    for (int i = 0; i < VOCAB_SIZE * DIMENSION_EMBEDDING; i++) {
+        E[i] = ((float)rand() / RAND_MAX) * 0.1f;  // Small random values
+    }
+    // Allocate memory for embeddings
+    
+    // Convert tokens to embeddings (skipping actual one-hot encoding for efficiency)
+    // In practice, this is equivalent to selecting the corresponding row from E for each token
+    for (int i = 0; i < size; i++) {
+        int token_id = (int)input[i];
+        if (token_id >= VOCAB_SIZE) token_id = 0;  // Handle out-of-vocabulary tokens
+        
+        // Copy the embedding for this token (equivalent to multiplying one-hot by E)
+        for (int j = 0; j < DIMENSION_EMBEDDING; j++) {
+            embeddings[i * DIMENSION_EMBEDDING + j] = E[token_id * DIMENSION_EMBEDDING + j];
+        }
+    }
+} 
 
 int main() { 
     // TODO: load the byte pair encoding from the previous program.
     // TODO: accept input from the user in the command line and then run the forward part
-    float* pe = malloc(10000 * DIMENSION_EMBEDDING * sizeof(float));
-    compute_positional_encoding(pe, 10000, DIMENSION_EMBEDDING);
-    // TODO: convert pe to matrix
     
-
+    // Maximum sequence length for which we pre-compute positional encodings
+    int max_seq_len = 10000;
+    float* pe = malloc(max_seq_len * DIMENSION_EMBEDDING * sizeof(float));
+    compute_positional_encoding(pe, max_seq_len, DIMENSION_EMBEDDING);
+    
     // dummy 100 token input
     int size = 100;
+    float input[100];
+    
+    // Assuming vocabulary size (for one-hot encoding)
+    // learned embedding projection
+    float* E = malloc(VOCAB_SIZE * DIMENSION_EMBEDDING * sizeof(float));
+    // embedding vector that will be input into model
+    float* embeddings = malloc(size * DIMENSION_EMBEDDING * sizeof(float));
+    convert_to_embeddings(E, embeddings, &input[0], size);
+    
+    // Add positional encodings to the embeddings
+    for (int i = 0; i < size; i++) {
+        for (int j = 0; j < DIMENSION_EMBEDDING; j++) {
+            // Add the positional encoding to the token embedding
+            // This ensures the model can distinguish between tokens at different positions
+            embeddings[i * DIMENSION_EMBEDDING + j] += pe[i * DIMENSION_EMBEDDING + j];
+        }
+    }
 
-    // TODO: learned projection matrices W_q, W_k, W_v
     // dummy scaled attention, 
-    float Q[size * DIMENSION_KEYS];
-    float K[size * DIMENSION_KEYS];
-    float V[size * DIMENSION_VALUES];
-    attention(Q, K, V, size);
+    float *Q = malloc(DIMENSION_EMBEDDING * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *K = malloc(DIMENSION_EMBEDDING * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *V = malloc(DIMENSION_EMBEDDING * DIMENSION_VALUES * NUM_HEADS * sizeof(float));
+
+    float* W_Q = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
+    float* W_K = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
+    float* W_V = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_VALUES * sizeof(float));
+    float* W_O = malloc(DIMENSION_HIDDEN * DIMENSION_HIDDEN * sizeof(float));
+
+    float *result = malloc(NUM_HEADS * size * DIMENSION_VALUES * sizeof(float));
+    
+    // Apply attention for each head
+    for (int head = 0; head < NUM_HEADS; head++) {
+        float *Q_head = Q + (head * size * DIMENSION_KEYS);
+        float *K_head = K + (head * size * DIMENSION_KEYS);
+        float *V_head = V + (head * size * DIMENSION_VALUES);
+        float *result_head = result + (head * size * DIMENSION_VALUES);
+        
+        // Project embeddings to Q, K, V for this head using weight matrices
+        float *W_Q_head = W_Q + (head * DIMENSION_HIDDEN * DIMENSION_KEYS);
+        float *W_K_head = W_K + (head * DIMENSION_HIDDEN * DIMENSION_KEYS);
+        float *W_V_head = W_V + (head * DIMENSION_HIDDEN * DIMENSION_VALUES);
+        
+        // Project embeddings to Q, K, V matrices
+        matmul(embeddings, W_Q_head, size, DIMENSION_HIDDEN, DIMENSION_KEYS, Q_head);
+        matmul(embeddings, W_K_head, size, DIMENSION_HIDDEN, DIMENSION_KEYS, K_head);
+        matmul(embeddings, W_V_head, size, DIMENSION_HIDDEN, DIMENSION_VALUES, V_head);
+        
+        attention(Q_head, K_head, V_head, size, result_head);
+    }
+
+
+
 
     printf("trained\n");
     // TODO: much much more
 
     free(pe);
+    free(W_Q);
+    free(W_K);
+    free(W_V);
+    free(W_O);
+    free(result);
 
 } 
