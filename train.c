@@ -110,9 +110,13 @@ void matmul(float A[], float B[], int N, int D, int M, float result[]) {
 // Q, K, V have already been projected here to size x d_k
 void attention(float Q[], float K[], float V[], int size, float* result) { 
     // Q * K^T
-    transpose(K, size, DIMENSION_KEYS);
+    // copy K into new memory to avoid corruption due to transpose
+    float K_temp[size*DIMENSION_KEYS];
+    for (int i = 0; i < size*DIMENSION_KEYS; i++) { K_temp[i] = K[i]; }
+
+    transpose(K_temp, size, DIMENSION_KEYS);
     float *QKT = malloc(size * size * sizeof(float));
-    matmul(Q, K, size, DIMENSION_KEYS, size, QKT);
+    matmul(Q, K_temp, size, DIMENSION_KEYS, size, QKT);
     // scale
     float factor = sqrt(DIMENSION_KEYS);
     for (int i = 0; i < size; i ++ ) { 
@@ -125,14 +129,11 @@ void attention(float Q[], float K[], float V[], int size, float* result) {
     softmax_matrix(QKT, QKT_out, size, size);
     matmul(QKT_out, V, size, size, DIMENSION_VALUES, result);
 
-
     free(QKT);
     free(QKT_out);
-    free(result);
-
 } 
 
-void masked_attention(float Q[], float K[], float V[], int size) { 
+void masked_attention(float Q[], float K[], float V[], int size, float* result) { 
     // Q * K^T
     transpose(K, size, DIMENSION_KEYS);
     float *QKT = malloc(size * size * sizeof(float));
@@ -156,14 +157,10 @@ void masked_attention(float Q[], float K[], float V[], int size) {
     //softmax
     float *QKT_out = malloc(size * size * sizeof(float));
     softmax_matrix(QKT, QKT_out, size, size);
-    float *result = malloc(size * DIMENSION_VALUES * sizeof(float));
     matmul(QKT_out, V, size, size, DIMENSION_VALUES, result);
-
 
     free(QKT);
     free(QKT_out);
-    free(result);
-
 } 
 
 //rows of Q, K, V are the embeddings
@@ -228,6 +225,14 @@ void convert_to_embeddings(float *E, float* embeddings, float* input, int size){
     }
 } 
 
+void init_rand(float *X, int size) { 
+    for (int i = 0; i < size; i++) {
+        X[i] = ((float)rand() / RAND_MAX) * 0.1f;  // Small random values
+    }
+} 
+     
+    
+
 int main() { 
     // TODO: load the byte pair encoding from the previous program.
     // TODO: accept input from the user in the command line and then run the forward part
@@ -236,10 +241,12 @@ int main() {
     int max_seq_len = 10000;
     float* pe = malloc(max_seq_len * DIMENSION_EMBEDDING * sizeof(float));
     compute_positional_encoding(pe, max_seq_len, DIMENSION_EMBEDDING);
+
     
     // dummy 100 token input
-    int size = 100;
-    float input[100];
+    int size = 10;
+    float input[size];
+    init_rand(&input[0], size);
     
     // Assuming vocabulary size (for one-hot encoding)
     // learned embedding projection
@@ -257,18 +264,25 @@ int main() {
         }
     }
 
+
     // dummy scaled attention, 
-    float *Q = malloc(DIMENSION_EMBEDDING * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
-    float *K = malloc(DIMENSION_EMBEDDING * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
-    float *V = malloc(DIMENSION_EMBEDDING * DIMENSION_VALUES * NUM_HEADS * sizeof(float));
+    float *Q = malloc(size* DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *K = malloc(size * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *V = malloc(size * DIMENSION_VALUES * NUM_HEADS * sizeof(float));
 
     float* W_Q = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
     float* W_K = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
     float* W_V = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_VALUES * sizeof(float));
     float* W_O = malloc(DIMENSION_HIDDEN * DIMENSION_HIDDEN * sizeof(float));
 
+    init_rand(W_Q, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS);
+    init_rand(W_K, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS);
+    init_rand(W_V, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_VALUES);
+    init_rand(W_O, DIMENSION_HIDDEN * DIMENSION_HIDDEN);
+
     float *result = malloc(NUM_HEADS * size * DIMENSION_VALUES * sizeof(float));
-    
+    // Initialize result array to zeros
+
     // Apply attention for each head
     for (int head = 0; head < NUM_HEADS; head++) {
         float *Q_head = Q + (head * size * DIMENSION_KEYS);
@@ -291,15 +305,24 @@ int main() {
 
 
 
+   // printf("elements of result\n");
+   // for(int i = 0; i < 10; i ++) { 
+   //     printf("%f\n", result[NUM_HEADS * DIMENSION_VALUES * size + i]);
+   //     printf("%f\n", result[i]);
+   // } 
 
-    printf("trained\n");
-    // TODO: much much more
+    fprintf(stdout, "attention finished\n");
 
     free(pe);
+    free(E);
+    free(embeddings);
     free(W_Q);
     free(W_K);
     free(W_V);
     free(W_O);
+    free(Q);
+    free(K);
+    free(V);
     free(result);
 
 } 
