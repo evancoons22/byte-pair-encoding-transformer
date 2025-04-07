@@ -27,14 +27,13 @@ void mha_forward();
 void mmha_forward();
 void nn_forward();
 void linear_forward();
-void add_and_norm();
 void linear();
 
 #include <math.h>
 #include <stdlib.h>
 
 // Compute positional encoding for a given maximum sequence length and model dimension.
-// 'pe' should be a pre-allocated array of size max_seq_len * d_model.
+// 'pe' should be a pre-allocated array of seq_len max_seq_len * d_model.
 void compute_positional_encoding(float *pe, int max_seq_len, int d_model) {
     for (int pos = 0; pos < max_seq_len; pos++) {
         for (int i = 0; i < d_model; i += 2) {
@@ -52,12 +51,12 @@ void compute_positional_encoding(float *pe, int max_seq_len, int d_model) {
 }
 
 
-void softmax(float input[], float output[], size_t size) {
+void softmax(float input[], float output[], size_t seq_len) {
     float sum = 0; 
-    for (size_t i = 0; i < size; i++) { 
+    for (size_t i = 0; i < seq_len; i++) { 
         sum += exp(input[i]); 
     } 
-    for (size_t i = 0; i < size; i++) { 
+    for (size_t i = 0; i < seq_len; i++) { 
         output[i] = exp(input[i]) / sum;
     } 
 } 
@@ -106,58 +105,58 @@ void matmul(float A[], float B[], int N, int D, int M, float result[]) {
     }
 }
 
-// size is the input size
-// Q, K, V have already been projected here to size x d_k
-void attention(float Q[], float K[], float V[], int size, float* result) { 
+// seq_len is the input seq_len
+// Q, K, V have already been projected here to seq_len x d_k
+void attention(float Q[], float K[], float V[], int seq_len, float* result) { 
     // Q * K^T
     // copy K into new memory to avoid corruption due to transpose
-    float K_temp[size*DIMENSION_KEYS];
-    for (int i = 0; i < size*DIMENSION_KEYS; i++) { K_temp[i] = K[i]; }
+    float K_temp[seq_len*DIMENSION_KEYS];
+    for (int i = 0; i < seq_len*DIMENSION_KEYS; i++) { K_temp[i] = K[i]; }
 
-    transpose(K_temp, size, DIMENSION_KEYS);
-    float *QKT = malloc(size * size * sizeof(float));
-    matmul(Q, K_temp, size, DIMENSION_KEYS, size, QKT);
+    transpose(K_temp, seq_len, DIMENSION_KEYS);
+    float *QKT = malloc(seq_len * seq_len * sizeof(float));
+    matmul(Q, K_temp, seq_len, DIMENSION_KEYS, seq_len, QKT);
     // scale
     float factor = sqrt(DIMENSION_KEYS);
-    for (int i = 0; i < size; i ++ ) { 
-        for (int j = 0; j < size; j ++ ) { 
-            QKT[i * size + j] /= factor;
+    for (int i = 0; i < seq_len; i ++ ) { 
+        for (int j = 0; j < seq_len; j ++ ) { 
+            QKT[i * seq_len + j] /= factor;
         } 
     } 
     //softmax
-    float *QKT_out = malloc(size * size * sizeof(float));
-    softmax_matrix(QKT, QKT_out, size, size);
-    matmul(QKT_out, V, size, size, DIMENSION_VALUES, result);
+    float *QKT_out = malloc(seq_len * seq_len * sizeof(float));
+    softmax_matrix(QKT, QKT_out, seq_len, seq_len);
+    matmul(QKT_out, V, seq_len, seq_len, DIMENSION_VALUES, result);
 
     free(QKT);
     free(QKT_out);
 } 
 
-void masked_attention(float Q[], float K[], float V[], int size, float* result) { 
+void masked_attention(float Q[], float K[], float V[], int seq_len, float* result) { 
     // Q * K^T
-    transpose(K, size, DIMENSION_KEYS);
-    float *QKT = malloc(size * size * sizeof(float));
-    matmul(Q, K, size, DIMENSION_KEYS, size, QKT);
+    transpose(K, seq_len, DIMENSION_KEYS);
+    float *QKT = malloc(seq_len * seq_len * sizeof(float));
+    matmul(Q, K, seq_len, DIMENSION_KEYS, seq_len, QKT);
     // scale
     float factor = sqrt(DIMENSION_KEYS);
-    for (int i = 0; i < size; i ++ ) { 
-        for (int j = 0; j < size; j ++ ) { 
-            QKT[i * size + j] /= factor;
+    for (int i = 0; i < seq_len; i ++ ) { 
+        for (int j = 0; j < seq_len; j ++ ) { 
+            QKT[i * seq_len + j] /= factor;
         } 
     } 
     
     // Apply causal mask: set upper triangular part (future tokens) to negative infinity
     // This ensures tokens can only attend to previous tokens and themselves
-    for (int i = 0; i < size; i++) {
-        for (int j = i + 1; j < size; j++) {
-            QKT[i * size + j] = -INFINITY;
+    for (int i = 0; i < seq_len; i++) {
+        for (int j = i + 1; j < seq_len; j++) {
+            QKT[i * seq_len + j] = -INFINITY;
         }
     }
     
     //softmax
-    float *QKT_out = malloc(size * size * sizeof(float));
-    softmax_matrix(QKT, QKT_out, size, size);
-    matmul(QKT_out, V, size, size, DIMENSION_VALUES, result);
+    float *QKT_out = malloc(seq_len * seq_len * sizeof(float));
+    softmax_matrix(QKT, QKT_out, seq_len, seq_len);
+    matmul(QKT_out, V, seq_len, seq_len, DIMENSION_VALUES, result);
 
     free(QKT);
     free(QKT_out);
@@ -168,6 +167,56 @@ void masked_attention(float Q[], float K[], float V[], int size, float* result) 
 //
 //}
 
+void add_and_norm(float input[], float output[], float result[], int seq_len, int dim) { 
+    // input: matrix of shape [seq_len × dim] - original input to the sublayer
+    // output: matrix of shape [seq_len × dim] - output from the sublayer
+    // result: matrix of shape [seq_len × dim] - where to store the final result
+    // seq_len: number of tokens in the sequence
+    // dim: dimension of each token's embedding (DIMENSION_HIDDEN/DIMENSION_EMBEDDING)
+    
+    // First, add the residual connection (skip connection)
+    // Add the original input to the sublayer output for each position and feature
+    for (int i = 0; i < seq_len; i++) {
+        for (int j = 0; j < dim; j++) {
+            result[i * dim + j] = input[i * dim + j] + output[i * dim + j];
+        }
+    }
+    
+    // Layer normalization - applied separately for each token
+    // For each token (row in the matrix)
+    for (int i = 0; i < seq_len; i++) {
+        // 1. Calculate mean across the feature dimension for this token
+        float mean = 0.0f;
+        for (int j = 0; j < dim; j++) {
+            mean += result[i * dim + j];
+        }
+        mean /= dim;
+        
+        // 2. Calculate variance across the feature dimension for this token
+        float variance = 0.0f;
+        for (int j = 0; j < dim; j++) {
+            float diff = result[i * dim + j] - mean;
+            variance += diff * diff;
+        }
+        variance /= dim;
+        
+        // 3. Normalize each feature of this token (add small epsilon for numerical stability)
+        float epsilon = 1e-5f;
+        for (int j = 0; j < dim; j++) {
+            result[i * dim + j] = (result[i * dim + j] - mean) / sqrtf(variance + epsilon);
+        }
+        
+        // 4. Apply scale and shift parameters (gamma and beta)
+        // In a real implementation, these would be learned parameters per feature
+        // For simplicity, we'll use gamma=1 and beta=0 (identity transformation)
+        // If you want to make these learnable, you would need to add them as parameters
+        // float gamma[dim]; // Learned per feature
+        // float beta[dim];  // Learned per feature
+        // for (int j = 0; j < dim; j++) {
+        //     result[i * dim + j] = gamma[j] * result[i * dim + j] + beta[j];
+        // }
+    }
+}
 
 void nn_forward(float weights[], float activations[], float z[]) { 
     // alignment in memory matters here: 
@@ -175,7 +224,7 @@ void nn_forward(float weights[], float activations[], float z[]) {
     // input will be considered the first of the activations
     // output will be considered the last of the activation
 
-    // input layer is size 256
+    // input layer is seq_len 256
     // NN_SIZE 1024
     //     *
     //     *
@@ -185,26 +234,44 @@ void nn_forward(float weights[], float activations[], float z[]) {
     //     *
 
     // first layer
-    int layer = 1;
-    for(size_t k = 0; k < NN_SIZE; k ++) {
-        for(size_t j = 0; j < DIMENSION_VALUES; j ++) { 
-            z[layer * 256 + k] += activations[j] * weights[k * DIMENSION_VALUES + j]; // 0 * 256 + j 
-        } 
-        activations[layer * 256 + k] = z[layer * 256 + k]; // some type of activation here
-    } 
-
+   // int layer = 1;
+   // for(size_t k = 0; k < NN_SIZE; k ++) {
+   //     for(size_t j = 0; j < DIMENSION_VALUES; j ++) { 
+   //         z[layer * 256 + k] += activations[j] * weights[k * DIMENSION_VALUES + j]; // 0 * 256 + j 
+   //     } 
+   //     activations[layer * 256 + k] = z[layer * 256 + k]; // some type of activation here
+   // } 
 
     // second layer
-    layer = 3;
-    for(size_t k = 0; k < DIMENSION_VALUES; k ++) {
-        for(size_t j = 0; j < NN_SIZE; j ++) { 
-            z[256 + 1024 * 2 + k] += activations[256 + 2 * NN_SIZE + j] * weights[256*1024 + 1024*1024 + k * NN_SIZE + j]; 
-        } 
-        activations[256 + 1024 * 2 + k] = z[256 + 1024 * 2 + k]; // some type of activation here
-    } 
+   // layer = 3;
+   // for(size_t k = 0; k < DIMENSION_VALUES; k ++) {
+   //     for(size_t j = 0; j < NN_SIZE; j ++) { 
+   //         z[256 + 1024 * 2 + k] += activations[256 + 2 * NN_SIZE + j] * weights[256*1024 + 1024*1024 + k * NN_SIZE + j]; 
+   //     } 
+   //     activations[256 + 1024 * 2 + k] = z[256 + 1024 * 2 + k]; // some type of activation here
+   // } 
+
+    
+    // ------------------------------
+    // something like this will replace this nn_forward function
+    // ------------------------------
+    
+    // 1024 is the inner size of the nn
+    // this replaces the above layer. 
+    float* weights_head = weights;
+    float* activations_head = activations;
+    float* z_head = z;
+    matmul(weights_head, activations_head, 1024, 256, 1, z_head);
+
+    // need relu activations
+    weights_head = weights + 1024*256;
+    activations_head = activations + 1024;
+    z_head = z + 1024;
+    matmul(weights, activations, 256, 1024, 1, z_head);
+
 } 
 
-void convert_to_embeddings(float *E, float* embeddings, float* input, int size){ 
+void convert_to_embeddings(float *E, float* embeddings, float* input, int seq_len){ 
     // Create learned embedding matrix E
     // Initialize E with random values (in a real scenario, this would be loaded from a trained model)
     for (int i = 0; i < VOCAB_SIZE * DIMENSION_EMBEDDING; i++) {
@@ -214,7 +281,7 @@ void convert_to_embeddings(float *E, float* embeddings, float* input, int size){
     
     // Convert tokens to embeddings (skipping actual one-hot encoding for efficiency)
     // In practice, this is equivalent to selecting the corresponding row from E for each token
-    for (int i = 0; i < size; i++) {
+    for (int i = 0; i < seq_len; i++) {
         int token_id = (int)input[i];
         if (token_id >= VOCAB_SIZE) token_id = 0;  // Handle out-of-vocabulary tokens
         
@@ -225,8 +292,8 @@ void convert_to_embeddings(float *E, float* embeddings, float* input, int size){
     }
 } 
 
-void init_rand(float *X, int size) { 
-    for (int i = 0; i < size; i++) {
+void init_rand(float *X, int seq_len) { 
+    for (int i = 0; i < seq_len; i++) {
         X[i] = ((float)rand() / RAND_MAX) * 0.1f;  // Small random values
     }
 } 
@@ -244,19 +311,19 @@ int main() {
 
     
     // dummy 100 token input
-    int size = 10;
-    float input[size];
-    init_rand(&input[0], size);
+    int seq_len = 10;
+    float input[seq_len];
+    init_rand(&input[0], seq_len);
     
-    // Assuming vocabulary size (for one-hot encoding)
+    // Assuming vocabulary seq_len (for one-hot encoding)
     // learned embedding projection
     float* E = malloc(VOCAB_SIZE * DIMENSION_EMBEDDING * sizeof(float));
     // embedding vector that will be input into model
-    float* embeddings = malloc(size * DIMENSION_EMBEDDING * sizeof(float));
-    convert_to_embeddings(E, embeddings, &input[0], size);
+    float* embeddings = malloc(seq_len * DIMENSION_EMBEDDING * sizeof(float));
+    convert_to_embeddings(E, embeddings, &input[0], seq_len);
     
     // Add positional encodings to the embeddings
-    for (int i = 0; i < size; i++) {
+    for (int i = 0; i < seq_len; i++) {
         for (int j = 0; j < DIMENSION_EMBEDDING; j++) {
             // Add the positional encoding to the token embedding
             // This ensures the model can distinguish between tokens at different positions
@@ -266,9 +333,9 @@ int main() {
 
 
     // dummy scaled attention, 
-    float *Q = malloc(size* DIMENSION_KEYS * NUM_HEADS * sizeof(float));
-    float *K = malloc(size * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
-    float *V = malloc(size * DIMENSION_VALUES * NUM_HEADS * sizeof(float));
+    float *Q = malloc(seq_len* DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *K = malloc(seq_len * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *V = malloc(seq_len * DIMENSION_VALUES * NUM_HEADS * sizeof(float));
 
     float* W_Q = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
     float* W_K = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
@@ -280,15 +347,17 @@ int main() {
     init_rand(W_V, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_VALUES);
     init_rand(W_O, DIMENSION_HIDDEN * DIMENSION_HIDDEN);
 
-    float *result = malloc(NUM_HEADS * size * DIMENSION_VALUES * sizeof(float));
+    // NUM_HEADS * DIMENSION_VALUES = DIMENSION_EMBEDDING
+    // hence, we add an norm with the input the is seq_len DIMENSION_EMBEDDING
+    float *result = malloc(NUM_HEADS * seq_len * DIMENSION_VALUES * sizeof(float));
     // Initialize result array to zeros
 
     // Apply attention for each head
     for (int head = 0; head < NUM_HEADS; head++) {
-        float *Q_head = Q + (head * size * DIMENSION_KEYS);
-        float *K_head = K + (head * size * DIMENSION_KEYS);
-        float *V_head = V + (head * size * DIMENSION_VALUES);
-        float *result_head = result + (head * size * DIMENSION_VALUES);
+        float *Q_head = Q + (head * seq_len * DIMENSION_KEYS);
+        float *K_head = K + (head * seq_len * DIMENSION_KEYS);
+        float *V_head = V + (head * seq_len * DIMENSION_VALUES);
+        float *result_head = result + (head * seq_len * DIMENSION_VALUES);
         
         // Project embeddings to Q, K, V for this head using weight matrices
         float *W_Q_head = W_Q + (head * DIMENSION_HIDDEN * DIMENSION_KEYS);
@@ -296,18 +365,58 @@ int main() {
         float *W_V_head = W_V + (head * DIMENSION_HIDDEN * DIMENSION_VALUES);
         
         // Project embeddings to Q, K, V matrices
-        matmul(embeddings, W_Q_head, size, DIMENSION_HIDDEN, DIMENSION_KEYS, Q_head);
-        matmul(embeddings, W_K_head, size, DIMENSION_HIDDEN, DIMENSION_KEYS, K_head);
-        matmul(embeddings, W_V_head, size, DIMENSION_HIDDEN, DIMENSION_VALUES, V_head);
+        matmul(embeddings, W_Q_head, seq_len, DIMENSION_HIDDEN, DIMENSION_KEYS, Q_head);
+        matmul(embeddings, W_K_head, seq_len, DIMENSION_HIDDEN, DIMENSION_KEYS, K_head);
+        matmul(embeddings, W_V_head, seq_len, DIMENSION_HIDDEN, DIMENSION_VALUES, V_head);
         
-        attention(Q_head, K_head, V_head, size, result_head);
+        attention(Q_head, K_head, V_head, seq_len, result_head);
     }
 
 
+    // TODO: add & norms
+    // result "add and norm"
+    float* result_aan1 = malloc(DIMENSION_EMBEDDING * seq_len * sizeof(float)); 
+    add_and_norm(embeddings, result, result_aan1, seq_len, DIMENSION_EMBEDDING);
+
+    // Feed-forward neural network (FFN) implementation
+    // Allocate memory for FFN weights
+    float* ffn_weights1 = malloc(DIMENSION_HIDDEN * NN_SIZE * sizeof(float));  // First layer weights
+    float* ffn_weights2 = malloc(NN_SIZE * DIMENSION_HIDDEN * sizeof(float));  // Second layer weights
+    
+    // Allocate memory for intermediate values and results
+    float* ffn_intermediate = malloc(seq_len * NN_SIZE * sizeof(float));       // Output after first layer
+    float* ffn_output = malloc(seq_len * DIMENSION_HIDDEN * sizeof(float));    // Final FFN output
+    
+    // Initialize weights with random values (in practice, these would be loaded from a trained model)
+    init_rand(ffn_weights1, DIMENSION_HIDDEN * NN_SIZE);
+    init_rand(ffn_weights2, NN_SIZE * DIMENSION_HIDDEN);
+    
+    // First layer: result_aan1 -> ffn_intermediate (with ReLU activation)
+    matmul(result_aan1, ffn_weights1, seq_len, DIMENSION_HIDDEN, NN_SIZE, ffn_intermediate);
+    
+    // Apply ReLU activation: max(0, x)
+    for (int i = 0; i < seq_len * NN_SIZE; i++) {
+        ffn_intermediate[i] = ffn_intermediate[i] > 0 ? ffn_intermediate[i] : 0;
+    }
+    
+    // Second layer: ffn_intermediate -> ffn_output
+    matmul(ffn_intermediate, ffn_weights2, seq_len, NN_SIZE, DIMENSION_HIDDEN, ffn_output);
+
+
+    // Second add & norm layer: add the output of the first add & norm to the FFN output
+    float* result_aan2 = malloc(DIMENSION_EMBEDDING * seq_len * sizeof(float)); 
+    add_and_norm(result_aan1, ffn_output, result_aan2, seq_len, DIMENSION_EMBEDDING);
+
+
+
+
+    
+
+    // TODO: 2 other attention layers
 
    // printf("elements of result\n");
    // for(int i = 0; i < 10; i ++) { 
-   //     printf("%f\n", result[NUM_HEADS * DIMENSION_VALUES * size + i]);
+   //     printf("%f\n", result[NUM_HEADS * DIMENSION_VALUES * seq_len + i]);
    //     printf("%f\n", result[i]);
    // } 
 
@@ -324,5 +433,11 @@ int main() {
     free(K);
     free(V);
     free(result);
+    free(result_aan1);
+    free(result_aan2);
+    free(ffn_weights1);
+    free(ffn_weights2);
+    free(ffn_intermediate);
+    free(ffn_output);
 
 } 
