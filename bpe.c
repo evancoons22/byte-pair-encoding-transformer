@@ -61,6 +61,31 @@ typedef struct {
     size_t capacity;
 } Map;
 
+void save_map(const char *filename, const Map *map) {
+    FILE *f = fopen(filename, "wb");
+    if (!f) return;
+
+    fwrite(&map->count, sizeof(size_t), 1, f);
+    fwrite(map->items, sizeof(KV), map->count, f);
+
+    fclose(f);
+}
+
+Map load_map(const char *filename) {
+    Map map = {0};
+    FILE *f = fopen(filename, "rb");
+    if (!f) return map;
+
+    fread(&map.count, sizeof(size_t), 1, f);
+    map.items = malloc(map.count * sizeof(KV));  // malloc is fine even if it's fixed
+    fread(map.items, sizeof(KV), map.count, f);
+
+    map.capacity = map.count;  // not needed, but harmless
+
+    fclose(f);
+    return map;
+}
+
 int contains(Counts* arr, uint32_t x[]) { 
     for (size_t i = 0; i < arr->count; i ++)  { 
         if (arr->items[i].text[0] == x[0] && arr->items[i+1].text[1] == x[1]) { 
@@ -290,7 +315,7 @@ void run_version_1() {
         fprintf(stderr, "Failed to load text from test.txt. Exiting.\n");
     }
     
-    printf("Loaded %zu bytes from test.txt\n", text_len);
+    printf("Loaded %zu bytes from file\n", text_len);
 
     // define tokens
     Tokens tokens = {0}; 
@@ -375,8 +400,10 @@ void run_version_2() {
         output_tokens.count = 0;   // Reset count but keep the allocated memory
     }
 
-    FILE* file = fopen("mapping.txt", "w"); 
-    print_to_file(file, &map);
+    // FILE* file = fopen("mapping.txt", "w"); 
+    // print_to_file(file, &map);
+    save_map("bpe", &map);
+
 
     printf("Iterations : %u\n", iteration);
     printf("Final text size: %ld\n", tokens.count);
@@ -384,6 +411,7 @@ void run_version_2() {
 
     bpe_heap_free(&heap);
 } 
+
 
 int main() { 
    // printf("version 1: \n");

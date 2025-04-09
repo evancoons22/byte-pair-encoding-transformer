@@ -1,7 +1,11 @@
 #include <stdio.h> 
 #include <stdlib.h> 
 #include <math.h>
-
+#include <math.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <assert.h>
 
 #define DIMENSION_EMBEDDING 256
 #define DIMENSION_HIDDEN 256  // usually the same as the embedding (model) dimension
@@ -9,28 +13,52 @@
 #define DIMENSION_KEYS (DIMENSION_HIDDEN / NUM_HEADS)  // 256 / 4 = 64
 #define DIMENSION_VALUES (DIMENSION_HIDDEN / NUM_HEADS) // 256 / 4 = 64
 #define NN_SIZE 1024  // 4 * DIMENSION_HIDDEN
-#define VOCAB_SIZE 500
+#define VOCAB_SIZE 6400
+
+#define DA_INIT_CAP 256
+#define da_append(da, item)                                                          \
+    do {                                                                                 \
+        if ((da)->count >= (da)->capacity) {                                             \
+            (da)->capacity = (da)->capacity == 0 ? DA_INIT_CAP : (da)->capacity*2;   \
+            (da)->items = realloc((da)->items, (da)->capacity*sizeof(*(da)->items)); \
+            assert((da)->items != NULL && "Buy more RAM lol");                       \
+        }                                                                                \
+                                                                                         \
+        (da)->items[(da)->count++] = (item);                                             \
+    } while (0)
 
 typedef struct { 
-    float* items; 
+    uint32_t* items;
     size_t count;
     size_t capacity;
-} Activations;
+} Tokens; 
 
 typedef struct { 
-    float* items; 
+    uint32_t value;
+    uint32_t l;
+    uint32_t r;
+} KV;
+
+typedef struct { 
+    KV* items;
     size_t count;
     size_t capacity;
-} Weights;
+} Map;
 
-void mha_forward();
-void mmha_forward();
-void nn_forward();
-void linear_forward();
-void linear();
+Map load_map(const char *filename) {
+    Map map = {0};
+    FILE *f = fopen(filename, "rb");
+    if (!f) return map;
 
-#include <math.h>
-#include <stdlib.h>
+    fread(&map.count, sizeof(size_t), 1, f);
+    map.items = malloc(map.count * sizeof(KV));  // malloc is fine even if it's fixed
+    fread(map.items, sizeof(KV), map.count, f);
+
+    map.capacity = map.count;  // not needed, but harmless
+
+    fclose(f);
+    return map;
+}
 
 // Compute positional encoding for a given maximum sequence length and model dimension.
 // 'pe' should be a pre-allocated array of seq_len max_seq_len * d_model.
@@ -297,30 +325,116 @@ void init_rand(float *X, int seq_len) {
         X[i] = ((float)rand() / RAND_MAX) * 0.1f;  // Small random values
     }
 } 
-     
+
+void ffn_block(float* input, float* weights1, float* weights2, float* output, int seq_len) {
+    // Process each token in the sequence independently
+    // input is [seq_len x DIMENSION_HIDDEN]
+    // weights1 is [DIMENSION_HIDDEN x NN_SIZE]
+    // weights2 is [NN_SIZE x DIMENSION_HIDDEN]
     
+    // Allocate memory for one token's intermediate values
+    float* token_intermediate = malloc(NN_SIZE * sizeof(float));
+    float* token_output = malloc(DIMENSION_HIDDEN * sizeof(float));
+    
+    // Process each token independently
+    for (int pos = 0; pos < seq_len; pos++) {
+        // Get the current token's input vector
+        float* token_input = &input[pos * DIMENSION_HIDDEN];
+        
+        // First layer: token_input -> token_intermediate
+        matmul(token_input, weights1, 1, DIMENSION_HIDDEN, NN_SIZE, token_intermediate);
+        
+        // Apply ReLU activation
+        for (int i = 0; i < NN_SIZE; i++) {
+            token_intermediate[i] = token_intermediate[i] > 0 ? token_intermediate[i] : 0;
+        }
+        
+        // Second layer: token_intermediate -> token_output
+        matmul(token_intermediate, weights2, 1, NN_SIZE, DIMENSION_HIDDEN, token_output);
+        
+        // Store the result in the output array
+        for (int i = 0; i < DIMENSION_HIDDEN; i++) {
+            output[pos * DIMENSION_HIDDEN + i] = token_output[i];
+        }
+    }
+    
+    // Add & norm layer for the entire sequence
+    add_and_norm(input, output, output, seq_len, DIMENSION_HIDDEN);
+
+    // Clean up
+    free(token_intermediate);
+    free(token_output);
+}
+
+Tokens convert_to_tokens(const char* text, Map map) {
+    Tokens tokens = {0};
+    size_t text_len = strlen(text);
+    
+    // Start with byte-level tokens
+    for (size_t i = 0; i < text_len; i++) {
+        uint32_t byte_token = (uint32_t)(unsigned char)text[i];
+        da_append(&tokens, byte_token);
+    }
+    
+    // Merge tokens according to the BPE map
+    int merged;
+    do {
+        merged = 0;
+        for (size_t i = 0; i < tokens.count - 1; i++) {
+            // Try to find a merge rule for adjacent tokens
+            for (size_t j = 0; j < map.count; j++) {
+                if (map.items[j].l == tokens.items[i] && i + 1 < tokens.count && map.items[j].r == tokens.items[i + 1]) {
+                    // Found a merge rule - apply it
+                    tokens.items[i] = map.items[j].value;
+                    // Remove the right token by shifting everything left
+                    for (size_t k = i + 1; k < tokens.count - 1; k++) {
+                        tokens.items[k] = tokens.items[k + 1];
+                    }
+                    tokens.count--;
+                    merged = 1;
+                    break;
+                }
+            }
+            if (merged) break;  // Start over since we modified the tokens
+        }
+    } while (merged);
+
+    return tokens;
+}
 
 int main() { 
     // TODO: load the byte pair encoding from the previous program.
     // TODO: accept input from the user in the command line and then run the forward part
     
+    Map map = load_map("bpe");
+    printf("map loaded\n");
+    printf("map count: %ld\n", map.count);
+
     // Maximum sequence length for which we pre-compute positional encodings
+    
+    char* example = "What is the second letter of the alphabet?";
+    Tokens example_tokens = convert_to_tokens(example, map);
+    
     int max_seq_len = 10000;
     float* pe = malloc(max_seq_len * DIMENSION_EMBEDDING * sizeof(float));
     compute_positional_encoding(pe, max_seq_len, DIMENSION_EMBEDDING);
 
     
-    // dummy 100 token input
-    int seq_len = 10;
-    float input[seq_len];
-    init_rand(&input[0], seq_len);
+    // Use the actual sequence length from our example tokens
+    int seq_len = example_tokens.count;
     
-    // Assuming vocabulary seq_len (for one-hot encoding)
     // learned embedding projection
     float* E = malloc(VOCAB_SIZE * DIMENSION_EMBEDDING * sizeof(float));
     // embedding vector that will be input into model
     float* embeddings = malloc(seq_len * DIMENSION_EMBEDDING * sizeof(float));
-    convert_to_embeddings(E, embeddings, &input[0], seq_len);
+    
+    // Convert our actual tokens to embeddings
+    float* token_floats = malloc(seq_len * sizeof(float));
+    for (int i = 0; i < seq_len; i++) {
+        token_floats[i] = (float)example_tokens.items[i];
+    }
+    convert_to_embeddings(E, embeddings, token_floats, seq_len);
+    free(token_floats);
     
     // Add positional encodings to the embeddings
     for (int i = 0; i < seq_len; i++) {
@@ -373,52 +487,155 @@ int main() {
     }
 
 
-    // TODO: add & norms
-    // result "add and norm"
+    // First add & norm after attention
     float* result_aan1 = malloc(DIMENSION_EMBEDDING * seq_len * sizeof(float)); 
     add_and_norm(embeddings, result, result_aan1, seq_len, DIMENSION_EMBEDDING);
 
-    // Feed-forward neural network (FFN) implementation
-    // Allocate memory for FFN weights
-    float* ffn_weights1 = malloc(DIMENSION_HIDDEN * NN_SIZE * sizeof(float));  // First layer weights
-    float* ffn_weights2 = malloc(NN_SIZE * DIMENSION_HIDDEN * sizeof(float));  // Second layer weights
-    
-    // Allocate memory for intermediate values and results
-    float* ffn_intermediate = malloc(seq_len * NN_SIZE * sizeof(float));       // Output after first layer
-    float* ffn_output = malloc(seq_len * DIMENSION_HIDDEN * sizeof(float));    // Final FFN output
-    
-    // Initialize weights with random values (in practice, these would be loaded from a trained model)
+    // Feed-forward neural network block
+    float* ffn_weights1 = malloc(DIMENSION_HIDDEN * NN_SIZE * sizeof(float));
+    float* ffn_weights2 = malloc(NN_SIZE * DIMENSION_HIDDEN * sizeof(float));
     init_rand(ffn_weights1, DIMENSION_HIDDEN * NN_SIZE);
     init_rand(ffn_weights2, NN_SIZE * DIMENSION_HIDDEN);
     
-    // First layer: result_aan1 -> ffn_intermediate (with ReLU activation)
-    matmul(result_aan1, ffn_weights1, seq_len, DIMENSION_HIDDEN, NN_SIZE, ffn_intermediate);
+    float* result_aan2 = malloc(DIMENSION_EMBEDDING * seq_len * sizeof(float));
+    ffn_block(result_aan1, ffn_weights1, ffn_weights2, result_aan2, seq_len);
+
+    // Decoder side implementation
+    // 1. Masked Multi-head Attention
+    float *decoder_Q = malloc(seq_len * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *decoder_K = malloc(seq_len * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *decoder_V = malloc(seq_len * DIMENSION_VALUES * NUM_HEADS * sizeof(float));
     
-    // Apply ReLU activation: max(0, x)
-    for (int i = 0; i < seq_len * NN_SIZE; i++) {
-        ffn_intermediate[i] = ffn_intermediate[i] > 0 ? ffn_intermediate[i] : 0;
+    float* decoder_W_Q = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
+    float* decoder_W_K = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
+    float* decoder_W_V = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_VALUES * sizeof(float));
+    float* decoder_W_O = malloc(DIMENSION_HIDDEN * DIMENSION_HIDDEN * sizeof(float));
+    
+    init_rand(decoder_W_Q, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS);
+    init_rand(decoder_W_K, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS);
+    init_rand(decoder_W_V, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_VALUES);
+    init_rand(decoder_W_O, DIMENSION_HIDDEN * DIMENSION_HIDDEN);
+
+    float *masked_mha_result = malloc(NUM_HEADS * seq_len * DIMENSION_VALUES * sizeof(float));
+
+    // Apply masked attention for each head
+    for (int head = 0; head < NUM_HEADS; head++) {
+        float *Q_head = decoder_Q + (head * seq_len * DIMENSION_KEYS);
+        float *K_head = decoder_K + (head * seq_len * DIMENSION_KEYS);
+        float *V_head = decoder_V + (head * seq_len * DIMENSION_VALUES);
+        float *result_head = masked_mha_result + (head * seq_len * DIMENSION_VALUES);
+        
+        float *W_Q_head = decoder_W_Q + (head * DIMENSION_HIDDEN * DIMENSION_KEYS);
+        float *W_K_head = decoder_W_K + (head * DIMENSION_HIDDEN * DIMENSION_KEYS);
+        float *W_V_head = decoder_W_V + (head * DIMENSION_HIDDEN * DIMENSION_VALUES);
+        
+        matmul(embeddings, W_Q_head, seq_len, DIMENSION_HIDDEN, DIMENSION_KEYS, Q_head);
+        matmul(embeddings, W_K_head, seq_len, DIMENSION_HIDDEN, DIMENSION_KEYS, K_head);
+        matmul(embeddings, W_V_head, seq_len, DIMENSION_HIDDEN, DIMENSION_VALUES, V_head);
+        
+        masked_attention(Q_head, K_head, V_head, seq_len, result_head);
     }
+
+    // Add & norm after masked attention
+    float* masked_aan = malloc(DIMENSION_EMBEDDING * seq_len * sizeof(float));
+    add_and_norm(embeddings, masked_mha_result, masked_aan, seq_len, DIMENSION_EMBEDDING);
+
+    // 2. Cross attention with encoder outputs (result_aan2)
+    float *cross_Q = malloc(seq_len * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *cross_K = malloc(seq_len * DIMENSION_KEYS * NUM_HEADS * sizeof(float));
+    float *cross_V = malloc(seq_len * DIMENSION_VALUES * NUM_HEADS * sizeof(float));
     
-    // Second layer: ffn_intermediate -> ffn_output
-    matmul(ffn_intermediate, ffn_weights2, seq_len, NN_SIZE, DIMENSION_HIDDEN, ffn_output);
-
-
-    // Second add & norm layer: add the output of the first add & norm to the FFN output
-    float* result_aan2 = malloc(DIMENSION_EMBEDDING * seq_len * sizeof(float)); 
-    add_and_norm(result_aan1, ffn_output, result_aan2, seq_len, DIMENSION_EMBEDDING);
-
-
-
-
+    float* cross_W_Q = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
+    float* cross_W_K = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS * sizeof(float));
+    float* cross_W_V = malloc(NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_VALUES * sizeof(float));
+    float* cross_W_O = malloc(DIMENSION_HIDDEN * DIMENSION_HIDDEN * sizeof(float));
     
+    init_rand(cross_W_Q, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS);
+    init_rand(cross_W_K, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_KEYS);
+    init_rand(cross_W_V, NUM_HEADS * DIMENSION_HIDDEN * DIMENSION_VALUES);
+    init_rand(cross_W_O, DIMENSION_HIDDEN * DIMENSION_HIDDEN);
 
-    // TODO: 2 other attention layers
+    float *cross_result = malloc(NUM_HEADS * seq_len * DIMENSION_VALUES * sizeof(float));
 
-   // printf("elements of result\n");
-   // for(int i = 0; i < 10; i ++) { 
-   //     printf("%f\n", result[NUM_HEADS * DIMENSION_VALUES * seq_len + i]);
-   //     printf("%f\n", result[i]);
-   // } 
+    // Apply cross attention for each head
+    for (int head = 0; head < NUM_HEADS; head++) {
+        float *Q_head = cross_Q + (head * seq_len * DIMENSION_KEYS);
+        float *K_head = cross_K + (head * seq_len * DIMENSION_KEYS);
+        float *V_head = cross_V + (head * seq_len * DIMENSION_VALUES);
+        float *result_head = cross_result + (head * seq_len * DIMENSION_VALUES);
+        
+        float *W_Q_head = cross_W_Q + (head * DIMENSION_HIDDEN * DIMENSION_KEYS);
+        float *W_K_head = cross_W_K + (head * DIMENSION_HIDDEN * DIMENSION_KEYS);
+        float *W_V_head = cross_W_V + (head * DIMENSION_HIDDEN * DIMENSION_VALUES);
+        
+        // Q comes from decoder, K and V come from encoder
+        matmul(masked_aan, W_Q_head, seq_len, DIMENSION_HIDDEN, DIMENSION_KEYS, Q_head);
+        matmul(result_aan2, W_K_head, seq_len, DIMENSION_HIDDEN, DIMENSION_KEYS, K_head);
+        matmul(result_aan2, W_V_head, seq_len, DIMENSION_HIDDEN, DIMENSION_VALUES, V_head);
+        
+        attention(Q_head, K_head, V_head, seq_len, result_head);
+    }
+
+    // Add & norm after cross attention
+    float* cross_aan = malloc(DIMENSION_EMBEDDING * seq_len * sizeof(float));
+    add_and_norm(masked_aan, cross_result, cross_aan, seq_len, DIMENSION_EMBEDDING);
+
+    // 3. Feed-forward neural network block
+    float* decoder_ffn_weights1 = malloc(DIMENSION_HIDDEN * NN_SIZE * sizeof(float));
+    float* decoder_ffn_weights2 = malloc(NN_SIZE * DIMENSION_HIDDEN * sizeof(float));
+    init_rand(decoder_ffn_weights1, DIMENSION_HIDDEN * NN_SIZE);
+    init_rand(decoder_ffn_weights2, NN_SIZE * DIMENSION_HIDDEN);
+    
+    float* ffn_output = malloc(DIMENSION_EMBEDDING * seq_len * sizeof(float));
+    ffn_block(cross_aan, decoder_ffn_weights1, decoder_ffn_weights2, ffn_output, seq_len);
+
+    // 4. Final linear layer and softmax
+    float* output_weights = malloc(DIMENSION_HIDDEN * VOCAB_SIZE * sizeof(float));
+    init_rand(output_weights, DIMENSION_HIDDEN * VOCAB_SIZE);
+    
+    float* logits = malloc(seq_len * VOCAB_SIZE * sizeof(float));
+    float* probabilities = malloc(seq_len * VOCAB_SIZE * sizeof(float));
+    
+    // Linear transformation for each token
+    matmul(ffn_output, output_weights, seq_len, DIMENSION_HIDDEN, VOCAB_SIZE, logits);
+    
+    // Apply softmax to get probabilities
+    softmax_matrix(logits, probabilities, seq_len, VOCAB_SIZE);
+
+    // Free decoder-side allocations
+    free(decoder_Q);
+    free(decoder_K);
+    free(decoder_V);
+    free(decoder_W_Q);
+    free(decoder_W_K);
+    free(decoder_W_V);
+    free(decoder_W_O);
+    free(masked_mha_result);
+    free(masked_aan);
+    free(cross_Q);
+    free(cross_K);
+    free(cross_V);
+    free(cross_W_Q);
+    free(cross_W_K);
+    free(cross_W_V);
+    free(cross_W_O);
+    free(cross_result);
+    free(cross_aan);
+    free(decoder_ffn_weights1);
+    free(decoder_ffn_weights2);
+    free(ffn_output);
+    free(output_weights);
+    free(logits);
+    free(probabilities);
+  // printf("print vectors of result\n");
+  // for(int i = 0; i < 10; i ++) { 
+  //     for(int j = 0; j < 10; j ++) { 
+  //    // printf("%f\n", result[NUM_HEADS * DIMENSION_VALUES * seq_len + i]);
+  //     printf("%f\n", result_aan2[DIMENSION_EMBEDDING*i + j]);
+  //     // printf("%f\n", result[i]);
+  //     } 
+  //     printf("\n");
+  // } 
 
     fprintf(stdout, "attention finished\n");
 
@@ -437,7 +654,5 @@ int main() {
     free(result_aan2);
     free(ffn_weights1);
     free(ffn_weights2);
-    free(ffn_intermediate);
-    free(ffn_output);
 
 } 
