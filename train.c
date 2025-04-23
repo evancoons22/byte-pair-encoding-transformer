@@ -366,7 +366,81 @@ void ffn_block(float* input, float* weights1, float* weights2, float* output, in
     free(token_output);
 }
 
+// Helper function to check if a token is a byte (0-255)
+static inline int is_byte_token(uint32_t token) {
+    return token <= 255;
+}
+
+// Helper function to find a token in the map
+static inline KV* find_token_in_map(uint32_t token, Map map) {
+    for (size_t i = 0; i < map.count; i++) {
+        if (map.items[i].value == token) {
+            return &map.items[i];
+        }
+    }
+    return NULL;
+}
+
+// Convert a single token back to bytes, writing to the output buffer
+// Returns number of bytes written
+size_t token_to_bytes(uint32_t token, char* output, size_t max_len, Map map) {
+    // Base case: if it's a byte token, write it directly
+    if (is_byte_token(token)) {
+        if (max_len < 1) return 0;
+        output[0] = (char)token;
+        return 1;
+    }
+    
+    // Find this token in the map
+    KV* kv = find_token_in_map(token, map);
+    if (!kv) {
+        fprintf(stderr, "Error: Token %u not found in map\n", token);
+        return 0;  // Token not found
+    }
+    
+    // Recursively decode left and right components
+    size_t bytes_written = 0;
+    
+    // Decode left component
+    size_t left_bytes = token_to_bytes(kv->l, output, max_len, map);
+    if (left_bytes == 0) return 0;  // Error or buffer full
+    bytes_written += left_bytes;
+    
+    // Decode right component
+    if (bytes_written >= max_len) return bytes_written;  // Buffer full
+    size_t right_bytes = token_to_bytes(kv->r, output + left_bytes, max_len - left_bytes, map);
+    if (right_bytes == 0) return bytes_written;  // Error or buffer full
+    bytes_written += right_bytes;
+    
+    return bytes_written;
+}
+
+// Convert array of tokens back to bytes
+size_t tokens_to_bytes(const uint32_t* tokens, size_t token_count, char* output, size_t max_len, Map map) {
+    if (!tokens || !output || token_count == 0 || max_len == 0) return 0;
+    
+    size_t total_written = 0;
+    
+    for (size_t i = 0; i < token_count; i++) {
+        // Check remaining buffer space
+        if (total_written >= max_len) break;
+        
+        size_t bytes_written = token_to_bytes(tokens[i], 
+                                            output + total_written, 
+                                            max_len - total_written, 
+                                            map);
+        
+        if (bytes_written == 0) break;  // Error occurred
+        total_written += bytes_written;
+    }
+    
+    return total_written;
+}
+
+// This function doesn't make sense to me, we need to fix it. Take in one token and use the defined map (which is a graph), to convert it back to a string of characters (could be one or more characters). Here is the map struct: 
+
 Tokens convert_to_tokens(const char* text, Map map) {
+    // takes a string of text, converts to list of uint32_t tokens
     Tokens tokens = {0};
     size_t text_len = strlen(text);
     
@@ -408,12 +482,12 @@ int main() {
     
     Map map = load_map("bpe");
     printf("map loaded\n");
-    printf("map count: %ld\n", map.count);
+    printf("vocab size: %ld\n", map.count);
 
     // Maximum sequence length for which we pre-compute positional encodings
     
     char* example = "What is the second letter of the alphabet?";
-    Tokens example_tokens = convert_to_tokens(example, map);
+    Tokens tokens = convert_to_tokens(example, map);
     
     int max_seq_len = 10000;
     float* pe = malloc(max_seq_len * DIMENSION_EMBEDDING * sizeof(float));
@@ -421,7 +495,7 @@ int main() {
 
     
     // Use the actual sequence length from our example tokens
-    int seq_len = example_tokens.count;
+    int seq_len = tokens.count;
     
     // learned embedding projection
     float* E = malloc(VOCAB_SIZE * DIMENSION_EMBEDDING * sizeof(float));
@@ -431,7 +505,7 @@ int main() {
     // Convert our actual tokens to embeddings
     float* token_floats = malloc(seq_len * sizeof(float));
     for (int i = 0; i < seq_len; i++) {
-        token_floats[i] = (float)example_tokens.items[i];
+        token_floats[i] = (float)tokens.items[i];
     }
     convert_to_embeddings(E, embeddings, token_floats, seq_len);
     free(token_floats);
@@ -600,7 +674,43 @@ int main() {
     matmul(ffn_output, output_weights, seq_len, DIMENSION_HIDDEN, VOCAB_SIZE, logits);
     
     // Apply softmax to get probabilities
+    // Apply softmax to get probabilities
     softmax_matrix(logits, probabilities, seq_len, VOCAB_SIZE);
+    
+    // For each position, find the token with highest probability
+    uint32_t* output_tokens = malloc(seq_len * sizeof(uint32_t));
+    float max_prob = 0.0;
+    int max_idx = 0;
+    for (int j = 1; j < VOCAB_SIZE; j++) {
+        if (probabilities[j] > max_prob) {
+            max_prob = probabilities[j];
+            max_idx = j;
+        }
+    }
+    output_tokens[0] = (uint32_t)max_idx;
+
+    // printf("output: %d \n", output_tokens[0]);
+    printf("output token: %d \n", max_idx);
+
+    size_t max_len = 16;
+    // Convert tokens back to text
+    char* output_buffer = malloc(128); // Allocate enough space for worst case
+    // size_t bytes_written = tokens_to_bytes(output_tokens, seq_len, output_buffer, seq_len * 4, map);
+    size_t bytes_written = token_to_bytes(max_idx, output_buffer, max_len, map);
+
+    printf("bytes written: %ld\n", bytes_written);
+    output_buffer[bytes_written] = '\0'; // Null terminate the string
+    printf("decoded token: \n");                                     
+    for (size_t i = 0; i < bytes_written; i++) {
+        printf("%d", output_buffer[i]);
+    } 
+    printf("\n");                                     
+
+    // Free the new allocations
+    free(output_tokens);
+    free(output_buffer);
+
+
 
     // Free decoder-side allocations
     free(decoder_Q);
