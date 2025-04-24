@@ -12,7 +12,7 @@ int main(int argc, char **argv)
     Nob_Cmd cmd = {0};
 
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s [bpe|train]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [bpe|train|markov|markovforward]\n", argv[0]);
         return 1;
     }
     if (strcmp(argv[1], "bpe") == 0) { 
@@ -25,8 +25,18 @@ int main(int argc, char **argv)
         (!nob_cmd_run_sync_and_reset(&cmd));
         nob_cmd_append(&cmd, "./build/train");
         if (!nob_cmd_run_sync_and_reset(&cmd));
+    } else if (strcmp(argv[1], "markov") == 0) {  
+        nob_cmd_append(&cmd, "cc", "-Wall", "-g", "-Wextra", "-o", BUILD_DIR"markov", "markov.c", "-lm");
+        (!nob_cmd_run_sync_and_reset(&cmd));
+        nob_cmd_append(&cmd, "./build/markov");
+        if (!nob_cmd_run_sync_and_reset(&cmd));
+    } else if (strcmp(argv[1], "markovforward") == 0) {  
+        nob_cmd_append(&cmd, "cc", "-Wall", "-g", "-Wextra", "-o", BUILD_DIR"markovforward", "markov_forward.c");
+        (!nob_cmd_run_sync_and_reset(&cmd));
+        nob_cmd_append(&cmd, "./build/markovforward");
+        if (!nob_cmd_run_sync_and_reset(&cmd));
     } else {  
-        fprintf(stderr, "Usage: %s [bpe|train]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [bpe|train|markov|markovforward]\n", argv[0]);
         return 1;
     } 
     return 0;
