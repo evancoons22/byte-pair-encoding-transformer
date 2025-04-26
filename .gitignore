@@ -1,6 +1,4 @@
-*.exe
 /build/.
-*.txt
 nob
 nob.old
 mapping.txt
